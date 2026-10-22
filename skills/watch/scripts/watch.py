@@ -18,6 +18,7 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from config import ConfigError, frame_cap, get_config, load_gemini_key, resolve_engine  # noqa: E402
+import agy  # noqa: E402
 import gemini  # noqa: E402
 from download import download, fetch_captions, is_url, auth_args  # noqa: E402
 from frames import MAX_FPS, auto_fps, auto_fps_focus, extract_at_timestamps, extract_keyframes, extract_scene_or_uniform, format_time, get_metadata, merge_frames, parse_time, parse_timestamps, validate_controls  # noqa: E402
@@ -91,6 +92,56 @@ def run_gemini(args, config, key, start_sec, end_sec, auth) -> int:
     return 0
 
 
+def run_agy(args, config, start_sec, end_sec, auth) -> int:
+    """agy watches the video on the signed-in subscription. The file never leaves via an API key."""
+    ignored = [flag for flag, name in LOCAL_ONLY_FLAGS if getattr(args, name) is not None]
+    ignored += [flag for flag, on in (("--no-whisper", args.no_whisper), ("--no-dedup", args.no_dedup)) if on]
+    clip = (start_sec, end_sec) if start_sec is not None or end_sec is not None else None
+    answer, error, work = None, None, None
+    try:
+        parent = Path(args.out_dir).expanduser().resolve() if args.out_dir else None
+        if parent:
+            parent.mkdir(parents=True, exist_ok=True)
+        work = Path(tempfile.mkdtemp(prefix="watch-", dir=parent))
+        print("[watch] downloading media…" if is_url(args.source) else "[watch] using local file…", file=sys.stderr)
+        media = download(args.source, work / "download", **(auth if is_url(args.source) else {}))
+        video = Path(media["video_path"])
+        if not is_url(args.source):  # Never let agy's sandbox roam the user's own folder.
+            copy = work / ("video" + video.suffix)
+            shutil.copyfile(video, copy)
+            video = copy
+        print("[watch] asking agy (subscription, no API key)…", file=sys.stderr)
+        answer = agy.ask(video, args.question, clip=clip, timeout=config["agy_timeout"])
+    except SystemExit as exc:
+        error = str(exc)
+    finally:
+        if work:  # Run-owned; holds at most a downloaded or copied video.
+            shutil.rmtree(work, ignore_errors=True)
+
+    print()
+    print("# watch: video report")
+    print()
+    print(f"- **Source:** {args.source} (given to agy on your Google subscription)")
+    print(f"- **Engine:** agy ({'answered' if answer else 'failed'})")
+    if clip:
+        print(f"- **Focus range:** {format_time(start_sec or 0)} → {format_time(end_sec) if end_sec is not None else 'end'}")
+    if ignored:
+        print(f"- **Ignored local options:** {', '.join(ignored)} (these only apply with --engine local)")
+    print()
+    if error:
+        print("## Unavailable evidence")
+        print()
+        print(f"- agy: {error}")
+        return 1
+    print("## Answer (from agy)")
+    print()
+    print("_These are agy's observations of the video, not frames you viewed yourself. "
+          "Relay them as such; rerun with `--engine local` to inspect frames directly._")
+    print()
+    print(answer)
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         prog="watch",
@@ -125,7 +176,7 @@ def main() -> int:
     )
     ap.add_argument(
         "--whisper",
-        choices=["groq", "openai", "whisperx"],
+        choices=["agy", "groq", "openai", "whisperx"],
         default=None,
         help="Select the fallback backend for this run; native captions still come first.",
     )
@@ -139,8 +190,9 @@ def main() -> int:
     cookies = ap.add_mutually_exclusive_group()
     cookies.add_argument("--cookies", default=None, help="Explicit cookie file (yt-dlp may update this jar)")
     cookies.add_argument("--cookies-from-browser", default=None, help="Explicit yt-dlp browser selector")
-    ap.add_argument("--engine", choices=["auto", "gemini", "local"], default=None,
-                    help="gemini: Google watches the video and answers (needs GEMINI_API_KEY). "
+    ap.add_argument("--engine", choices=["auto", "agy", "gemini", "local"], default=None,
+                    help="agy: the Antigravity CLI watches the video on your subscription (no key). "
+                         "gemini: Google watches the video and answers (needs GEMINI_API_KEY). "
                          "local: frames + transcript on this machine. Default auto: gemini when a key exists.")
     ap.add_argument("--question", default=None,
                     help="The user's question. Sent to Gemini on a gemini run; unused by the local engine.")
@@ -162,7 +214,10 @@ def main() -> int:
     auth = {"cookies_file": cookies_file, "cookies_from_browser": cookies_browser}
 
     gemini_key = load_gemini_key()
-    if resolve_engine(args.engine or config["engine"], bool(gemini_key)) == "gemini":
+    engine = resolve_engine(args.engine or config["engine"], bool(gemini_key))
+    if engine == "agy":
+        return run_agy(args, config, start_sec, end_sec, auth)
+    if engine == "gemini":
         return run_gemini(args, config, gemini_key, start_sec, end_sec, auth)
 
     parent = Path(args.out_dir).expanduser().resolve() if args.out_dir else None
@@ -265,7 +320,7 @@ def main() -> int:
 
     transcript_state = "missing"
     if not track_available and backend_choice != "none" and video_path and meta.get("has_audio"):
-        backend, api_key = ("whisperx", None) if backend_choice == "whisperx" else load_api_key(None if backend_choice == "auto" else backend_choice)
+        backend, api_key = (backend_choice, None) if backend_choice in ("whisperx", "agy") else load_api_key(None if backend_choice == "auto" else backend_choice)
         if backend:
             try:
                 all_segments, used_backend = transcribe_video(video_path, work / "audio.mp3", backend=backend, api_key=api_key)

@@ -362,6 +362,14 @@ def transcribe_video(
         from local_whisperx import transcribe_audio
         segments = transcribe_audio(extract_audio(video_path, audio_out))
         return segments, "whisperx"
+    if backend == "agy":
+        import agy
+        print("[watch] extracting audio for agy…", file=sys.stderr)
+        path = extract_audio(video_path, audio_out)
+        print("[watch] transcribing with agy (subscription, no API key)…", file=sys.stderr)
+        segments = agy.transcribe_audio(path)
+        print(f"[watch] transcribed {len(segments)} segments via agy", file=sys.stderr)
+        return segments, "agy"
     if backend not in (None, "groq", "openai"):
         raise SystemExit("Unknown transcription backend.")
     if backend is None or api_key is None:
@@ -416,7 +424,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Transcribe local media with the selected Whisper backend.")
     parser.add_argument("video")
     parser.add_argument("audio_out", nargs="?", default="audio.mp3", type=Path)
-    parser.add_argument("--backend", choices=["groq", "openai", "whisperx"])
+    parser.add_argument("--backend", choices=["agy", "groq", "openai", "whisperx"])
     args = parser.parse_args()
     try:
         segments, backend = transcribe_video(args.video, Path(args.audio_out), backend=args.backend)
