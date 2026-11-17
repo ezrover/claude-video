@@ -12,8 +12,8 @@ CONFIG_DIR = Path.home() / '.config' / 'watch'
 CONFIG_FILE = CONFIG_DIR / '.env'
 DEFAULT_DETAIL = 'balanced'
 DETAILS = {'transcript', 'efficient', 'balanced', 'token-burner'}
-BACKENDS = {'auto', 'agy', 'groq', 'openai', 'whisperx', 'none'}
-ENGINES = {'auto', 'agy', 'gemini', 'local'}
+BACKENDS = {'auto', 'groq', 'openai', 'whisperx', 'none'}
+ENGINES = {'auto', 'gemini', 'local'}
 DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash'
 
 
@@ -122,9 +122,7 @@ def load_gemini_key() -> str | None:
 
 def resolve_engine(choice: str, has_key: bool) -> str:
     if choice not in ENGINES:
-        raise ConfigError('WATCH_ENGINE must be auto, agy, gemini, or local.')
-    if choice == 'agy':
-        return 'agy'
+        raise ConfigError('WATCH_ENGINE must be auto, gemini, or local.')
     if choice == 'gemini' and not has_key:
         raise ConfigError('The gemini engine needs GEMINI_API_KEY in the environment or '
                           f'{CONFIG_FILE}. Add it, or rerun with --engine local.')
@@ -138,10 +136,10 @@ def get_config(*, backend_override: str | None = None) -> dict:
     detail = setting('WATCH_DETAIL', DEFAULT_DETAIL)
     backend = backend_override if backend_override is not None else setting('WATCH_WHISPER_BACKEND', 'auto')
     if backend not in BACKENDS:
-        raise ConfigError('WATCH_WHISPER_BACKEND must be auto, agy, groq, openai, whisperx, or none.')
+        raise ConfigError('WATCH_WHISPER_BACKEND must be auto, groq, openai, whisperx, or none.')
     engine = setting('WATCH_ENGINE', 'auto')
     if engine not in ENGINES:
-        raise ConfigError('WATCH_ENGINE must be auto, agy, gemini, or local.')
+        raise ConfigError('WATCH_ENGINE must be auto, gemini, or local.')
     return {
         'detail': detail if detail in DETAILS else DEFAULT_DETAIL,
         'config_file': str(CONFIG_FILE),
@@ -149,7 +147,6 @@ def get_config(*, backend_override: str | None = None) -> dict:
         'engine': engine,
         'gemini_model': setting('WATCH_GEMINI_MODEL', DEFAULT_GEMINI_MODEL) or DEFAULT_GEMINI_MODEL,
         'gemini_timeout': positive_number(setting('WATCH_GEMINI_TIMEOUT', '600'), 'WATCH_GEMINI_TIMEOUT'),
-        'agy_timeout': positive_number(setting('WATCH_AGY_TIMEOUT', '900'), 'WATCH_AGY_TIMEOUT'),
         'sub_lang': setting('WATCH_SUB_LANG', 'auto'),
         'cookies_file': setting('WATCH_COOKIES_FILE'),
         'cookies_from_browser': setting('WATCH_COOKIES_FROM_BROWSER'),
